@@ -1,0 +1,97 @@
+name: Sync Stories to GitHub & Lovable
+
+on:
+  push:
+    paths:
+      - 'Product/stories/**/*.md'
+    branches:
+      - main
+      - master
+
+jobs:
+  sync-stories:
+    runs-on: ubuntu-latest
+    name: Sync Story Updates
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect changed stories
+        id: changed
+        run: |
+          if [ "${{ github.event.before }}" != "" ]; then
+            CHANGED=$(git diff --name-only ${{ github.event.before }} HEAD | grep '^Product/stories/.*\.md$' || true)
+          else
+            CHANGED=$(git diff --name-only HEAD~1 HEAD | grep '^Product/stories/.*\.md$' || true)
+          fi
+          echo "stories<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGED" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Setup GitHub CLI
+        run: |
+          if ! command -v gh &> /dev/null; then
+            sudo apt-get update && sudo apt-get install -y gh
+          fi
+
+      - name: Sync each story to GitHub
+        if: steps.changed.outputs.stories != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          for story_file in ${{ steps.changed.outputs.stories }}; do
+            if [ ! -f "$story_file" ]; then
+              echo "⏭️  Skipping deleted file: $story_file"
+              continue
+            fi
+
+            # Extract metadata
+            story_id=$(grep "^id:" "$story_file" | cut -d' ' -f2-)
+            title=$(grep "^title:" "$story_file" | cut -d' ' -f2-)
+            status=$(grep "^status:" "$story_file" | cut -d' ' -f2-)
+            progress=$(grep "^progress:" "$story_file" | cut -d' ' -f2-)
+            github_issue=$(grep "^github_issue_number:" "$story_file" | cut -d' ' -f2-)
+            updated=$(grep "^updated:" "$story_file" | cut -d' ' -f2-)
+
+            if [ -z "$github_issue" ] || [ "$github_issue" = "github_issue_number" ]; then
+              echo "⏭️  Skipping $story_id (no GitHub issue)"
+              continue
+            fi
+
+            echo "🔄 Syncing $story_id to issue #$github_issue"
+
+            # Extract body (content after frontmatter)
+            body=$(awk '/^---$/{if(++count==2){flag=1; next}} flag' "$story_file")
+
+            # Update GitHub issue
+            gh api "repos/$REPO/issues/$github_issue" \
+              -X PATCH \
+              -f "title=$title" \
+              -f "body=## Story ID: $story_id
+
+## Current Status
+**Status:** $status
+**Progress:** $progress%
+**Last Synced:** $updated
+
+$body
+
+---
+_Synced from Product/stories/$(basename "$story_file") at $(date -u +'%Y-%m-%dT%H:%M:%SZ')_"
+
+            echo "✅ Synced $story_id"
+          done
+
+      - name: Report sync status
+        if: always()
+        run: |
+          echo "## ✅ Story Sync Complete"
+          echo ""
+          echo "- **Workflow**: ${{ github.workflow }}"
+          echo "- **Trigger**: Push to ${{ github.ref }}"
+          echo "- **Commit**: ${{ github.sha }}"
+          echo "- **Time**: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
