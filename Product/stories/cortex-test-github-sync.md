@@ -1,15 +1,19 @@
 ---
 id: cortex-test-github-sync
 title: Test GitHub integration sync
-status: Done
+status: Deployed
 progress: 25
 github_issue_number: 2
 lovable_project_id: 1c73a3f5-2e1c-473f-9f9c-a0346ae28d09
 created: 2026-10-03T12:53:00Z
-updated: 2026-10-03T13:32:55Z
+updated: 2026-10-03T13:33:00Z
 changelog:
+  - 2026-10-03T13:33:00Z: 🚀 Deployed to Lovable (v0.1.0) - Phase 2 automation release
   - 2026-10-03T13:32:55Z: Status synced from GitHub issue #2 (closed) to Done
   - 2026-10-03T12:56:00Z: Story created and synced to GitHub
+deployed: 2026-10-03T13:33:00Z
+deployment_version: v0.1.0
+lovable_deployment_id: 1c73a3f5-2e1c-473f-9f9c-a0346ae28d09
 ---
 
 ## Test GitHub integration sync
@@ -39,3 +43,10 @@ Test story to verify bidirectional sync between Product folder, GitHub issues, a
 - GitHub Issue: ✅ Synced (#2)
 - Lovable Project: ✅ Linked (1c73a3f5-2e1c-473f-9f9c-a0346ae28d09)
 - Product Story: ✅ Master Source
+
+## Deployment Status
+
+**Status:** Deployed
+**Deployed At:** 2026-10-03T13:33:00Z
+**Version:** v0.1.0
+**Lovable Project:** [1c73a3f5-2e1c-473f-9f9c-a0346ae28d09](https://lovable.dev/projects/1c73a3f5-2e1c-473f-9f9c-a0346ae28d09)
