@@ -1,0 +1,152 @@
+name: Sync Lovable Deployments to Stories
+
+# This workflow detects Lovable project deployments and updates story status
+# Can be triggered manually or via webhook when Lovable deploys
+# For now, manual trigger to test the pattern
+
+on:
+  workflow_dispatch:
+    inputs:
+      story_id:
+        description: 'Story ID to mark as deployed (e.g., cortex-test-github-sync)'
+        required: true
+      lovable_project_id:
+        description: 'Lovable project ID'
+        required: true
+      deployment_version:
+        description: 'Deployment version/commit'
+        required: false
+        default: 'latest'
+      deployment_notes:
+        description: 'Deployment notes'
+        required: false
+
+jobs:
+  sync-deployment:
+    runs-on: ubuntu-latest
+    name: Sync Lovable Deployment to Story
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Find story file
+        id: find
+        run: |
+          STORY_ID="${{ github.event.inputs.story_id }}"
+          STORY_FILE="Product/stories/${STORY_ID}.md"
+
+          if [ ! -f "$STORY_FILE" ]; then
+            echo "❌ Story file not found: $STORY_FILE"
+            exit 1
+          fi
+
+          echo "story_file=$STORY_FILE" >> $GITHUB_OUTPUT
+          echo "✅ Found story: $STORY_FILE"
+
+      - name: Update story with deployment info
+        if: steps.find.outputs.story_file != ''
+        run: |
+          STORY_FILE="${{ steps.find.outputs.story_file }}"
+          STORY_ID="${{ github.event.inputs.story_id }}"
+          LOVABLE_ID="${{ github.event.inputs.lovable_project_id }}"
+          VERSION="${{ github.event.inputs.deployment_version }}"
+          NOTES="${{ github.event.inputs.deployment_notes }}"
+          TIMESTAMP=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+
+          echo "🚀 Marking $STORY_ID as deployed"
+
+          # Update status to Deployed
+          sed -i "s/^status: .*/status: Deployed/" "$STORY_FILE"
+
+          # Update timestamp
+          sed -i "s/^updated: .*/updated: $TIMESTAMP/" "$STORY_FILE"
+
+          # Add deployment info to story frontmatter
+          if ! grep -q "^deployed:" "$STORY_FILE"; then
+            # Find the end of frontmatter (second ---)
+            LINE=$(awk '/^---$/{if(++count==2){print NR; exit}}' "$STORY_FILE")
+            sed -i "$((LINE))i\\deployed: $TIMESTAMP\ndeployment_version: $VERSION\nlovable_deployment_id: $LOVABLE_ID" "$STORY_FILE"
+          else
+            sed -i "s/^deployed: .*/deployed: $TIMESTAMP/" "$STORY_FILE"
+            sed -i "s/^deployment_version: .*/deployment_version: $VERSION/" "$STORY_FILE"
+          fi
+
+          # Add changelog entry
+          CHANGELOG_ENTRY="  - $TIMESTAMP: 🚀 Deployed to Lovable ($VERSION)"
+          if [ ! -z "$NOTES" ]; then
+            CHANGELOG_ENTRY="$CHANGELOG_ENTRY - $NOTES"
+          fi
+
+          LINE=$(grep -n "^changelog:" "$STORY_FILE" | cut -d: -f1)
+          if [ ! -z "$LINE" ]; then
+            sed -i "$((LINE+1))i\\$CHANGELOG_ENTRY" "$STORY_FILE"
+          fi
+
+          echo "✅ Story marked as deployed"
+          echo "Timestamp: $TIMESTAMP"
+          echo "Version: $VERSION"
+
+      - name: Create deployment entry in story
+        if: steps.find.outputs.story_file != ''
+        run: |
+          STORY_FILE="${{ steps.find.outputs.story_file }}"
+          TIMESTAMP=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+          VERSION="${{ github.event.inputs.deployment_version }}"
+          LOVABLE_ID="${{ github.event.inputs.lovable_project_id }}"
+
+          # Append deployment section if not exists
+          if ! grep -q "^## Deployment Status" "$STORY_FILE"; then
+            echo "" >> "$STORY_FILE"
+            echo "## Deployment Status" >> "$STORY_FILE"
+            echo "" >> "$STORY_FILE"
+            echo "**Status:** Deployed" >> "$STORY_FILE"
+            echo "**Deployed At:** $TIMESTAMP" >> "$STORY_FILE"
+            echo "**Version:** $VERSION" >> "$STORY_FILE"
+            echo "**Lovable Project:** [$LOVABLE_ID](https://lovable.dev/projects/$LOVABLE_ID)" >> "$STORY_FILE"
+          else
+            # Update existing deployment section
+            sed -i "/^## Deployment Status/,/^##/{
+              s/^**Status:** .*/\*\*Status:\*\* Deployed/
+              s/^**Deployed At:** .*/\*\*Deployed At:\*\* $TIMESTAMP/
+              s/^**Version:** .*/\*\*Version:\*\* $VERSION/
+            }" "$STORY_FILE"
+          fi
+
+      - name: Commit deployment update
+        if: steps.find.outputs.story_file != ''
+        run: |
+          git config user.name "GitHub Actions (Deployment Bot)"
+          git config user.email "actions@github.com"
+
+          STORY_FILE="${{ steps.find.outputs.story_file }}"
+          STORY_ID="${{ github.event.inputs.story_id }}"
+          VERSION="${{ github.event.inputs.deployment_version }}"
+
+          git add "$STORY_FILE"
+          git commit -m "deploy: Mark $STORY_ID as deployed ($VERSION)
+
+- Updated story status to Deployed
+- Added deployment timestamp: $(date -u +'%Y-%m-%dT%H:%M:%SZ')
+- Added deployment version: $VERSION
+- Updated Lovable project link
+
+Triggered by: Lovable deployment workflow
+" 2>/dev/null || echo "No changes to commit"
+
+      - name: Push deployment update
+        if: steps.find.outputs.story_file != ''
+        run: |
+          if ! git diff --cached --quiet; then
+            git push || echo "⚠️  Push skipped (branch protection or no changes)"
+          fi
+
+      - name: Report deployment
+        run: |
+          echo "## 🚀 Deployment Sync Report"
+          echo ""
+          echo "- **Story**: ${{ github.event.inputs.story_id }}"
+          echo "- **Lovable Project**: ${{ github.event.inputs.lovable_project_id }}"
+          echo "- **Version**: ${{ github.event.inputs.deployment_version }}"
+          echo "- **Deployed At**: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+          echo "- **Status**: ✅ Story marked as Deployed"

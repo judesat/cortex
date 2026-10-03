@@ -1,0 +1,135 @@
+name: Sync GitHub Issues to Product Stories
+
+# Trigger when GitHub issues are opened, edited, or closed
+on:
+  issues:
+    types: [opened, edited, closed, reopened]
+
+jobs:
+  sync-issue-to-story:
+    runs-on: ubuntu-latest
+    name: Sync GitHub Issue to Product Story
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract story info from issue
+        id: extract
+        run: |
+          ISSUE_NUMBER=${{ github.event.issue.number }}
+          ISSUE_TITLE="${{ github.event.issue.title }}"
+          ISSUE_STATE="${{ github.event.issue.state }}"
+          ISSUE_BODY="${{ github.event.issue.body }}"
+
+          # Try to find story ID in issue body (format: ## Story ID: cortex-xxx)
+          STORY_ID=$(echo "$ISSUE_BODY" | grep "^## Story ID:" | head -1 | sed 's/^## Story ID: *//' || echo "")
+
+          echo "issue_number=$ISSUE_NUMBER" >> $GITHUB_OUTPUT
+          echo "issue_title=$ISSUE_TITLE" >> $GITHUB_OUTPUT
+          echo "issue_state=$ISSUE_STATE" >> $GITHUB_OUTPUT
+          echo "story_id=$STORY_ID" >> $GITHUB_OUTPUT
+
+          if [ -z "$STORY_ID" ]; then
+            echo "⏭️  No story ID found in issue body, skipping"
+            exit 0
+          fi
+
+      - name: Find story file
+        id: find_story
+        if: steps.extract.outputs.story_id != ''
+        run: |
+          STORY_ID="${{ steps.extract.outputs.story_id }}"
+          STORY_FILE="Product/stories/${STORY_ID}.md"
+
+          if [ ! -f "$STORY_FILE" ]; then
+            echo "⏭️  Story file not found: $STORY_FILE"
+            exit 0
+          fi
+
+          echo "story_file=$STORY_FILE" >> $GITHUB_OUTPUT
+
+      - name: Sync issue state to story status
+        if: steps.find_story.outputs.story_file != ''
+        run: |
+          STORY_FILE="${{ steps.find_story.outputs.story_file }}"
+          ISSUE_STATE="${{ steps.extract.outputs.issue_state }}"
+          ISSUE_NUMBER="${{ steps.extract.outputs.issue_number }}"
+
+          # Map GitHub issue state to story status
+          if [ "$ISSUE_STATE" = "closed" ]; then
+            NEW_STATUS="Done"
+          else
+            NEW_STATUS="In Progress"
+          fi
+
+          echo "🔄 Syncing GitHub issue #$ISSUE_NUMBER state to story status: $NEW_STATUS"
+
+          # Update story status (using sed for cross-platform compatibility)
+          sed -i "s/^status: .*/status: $NEW_STATUS/" "$STORY_FILE"
+
+          # Update timestamp
+          TIMESTAMP=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+          sed -i "s/^updated: .*/updated: $TIMESTAMP/" "$STORY_FILE"
+
+          # Add changelog entry
+          CHANGELOG_ENTRY="  - $TIMESTAMP: Status synced from GitHub issue #$ISSUE_NUMBER ($ISSUE_STATE) to $NEW_STATUS"
+
+          # Insert changelog entry (find changelog: line and insert after it)
+          LINE=$(grep -n "^changelog:" "$STORY_FILE" | cut -d: -f1)
+          if [ ! -z "$LINE" ]; then
+            sed -i "$((LINE+1))i\\$CHANGELOG_ENTRY" "$STORY_FILE"
+          fi
+
+          echo "✅ Story status updated to: $NEW_STATUS"
+
+      - name: Commit changes
+        if: steps.find_story.outputs.story_file != ''
+        run: |
+          git config user.name "GitHub Actions (Sync Bot)"
+          git config user.email "actions@github.com"
+
+          if git diff --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+
+          STORY_FILE="${{ steps.find_story.outputs.story_file }}"
+          STORY_ID="${{ steps.extract.outputs.story_id }}"
+          ISSUE_NUMBER="${{ steps.extract.outputs.issue_number }}"
+
+          git add "$STORY_FILE"
+          git commit -m "sync: Update $STORY_ID status from GitHub issue #$ISSUE_NUMBER
+
+- Synced GitHub issue state to story status
+- Updated timestamp to $(date -u +'%Y-%m-%dT%H:%M:%SZ')
+- Added sync entry to changelog
+
+Triggered by: GitHub issue #$ISSUE_NUMBER (${{ github.event.issue.state }})
+" 2>/dev/null || true
+
+      - name: Push changes
+        if: steps.find_story.outputs.story_file != ''
+        run: |
+          if git diff --quiet; then
+            echo "No changes to push"
+            exit 0
+          fi
+
+          git push || echo "⚠️  Push failed (likely no changes or branch protection)"
+
+  report-sync:
+    runs-on: ubuntu-latest
+    name: Report Sync Status
+    if: always()
+    needs: sync-issue-to-story
+
+    steps:
+      - name: Report completion
+        run: |
+          echo "## ✅ GitHub Issue Sync Complete"
+          echo ""
+          echo "- **Issue**: #${{ github.event.issue.number }}"
+          echo "- **State**: ${{ github.event.issue.state }}"
+          echo "- **Action**: Sync to Product story"
+          echo "- **Time**: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
